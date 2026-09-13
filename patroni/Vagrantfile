@@ -1,0 +1,255 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+require 'yaml'
+require 'fileutils'
+
+ROOT = File.dirname(__FILE__)
+CONF = YAML.load_file(File.join(ROOT, 'config.yaml'))
+
+PREFIX  = CONF['network_prefix']
+DOMAIN  = CONF['domain']
+CLUSTER = CONF['cluster_name']
+
+# ---------------------------------------------------------------------------
+# Topoloji
+# ---------------------------------------------------------------------------
+etcd_nodes = (1..CONF['etcd']['count']).map do |i|
+  { name: "etcd#{i}",
+    ip:   "#{PREFIX}.#{CONF['etcd']['ip_start'] + i - 1}",
+    role: 'etcd',
+    memory: CONF['etcd']['memory'],
+    cpus:   CONF['etcd']['cpus'] }
+end
+
+pg_nodes = (1..CONF['pg']['count']).map do |i|
+  { name: "pg#{i}",
+    ip:   "#{PREFIX}.#{CONF['pg']['ip_start'] + i - 1}",
+    role: 'pg',
+    memory: CONF['pg']['memory'],
+    cpus:   CONF['pg']['cpus'] }
+end
+
+lb_nodes = if CONF['haproxy']['enabled']
+  [{ name: 'haproxy',
+     ip:   "#{PREFIX}.#{CONF['haproxy']['ip']}",
+     role: 'haproxy',
+     memory: CONF['haproxy']['memory'],
+     cpus:   CONF['haproxy']['cpus'] }]
+else
+  []
+end
+
+ALL_NODES = etcd_nodes + pg_nodes + lb_nodes
+
+FIREWALL = {
+  'etcd'    => '2379/tcp 2380/tcp',
+  'pg'      => '5432/tcp 8008/tcp',
+  'haproxy' => '5000/tcp 5001/tcp 7000/tcp'
+}
+
+# ---------------------------------------------------------------------------
+# Uretilen ortak dosyalar (/vagrant uzerinden VM'lere gider)
+# ---------------------------------------------------------------------------
+GEN = File.join(ROOT, '.generated')
+FileUtils.mkdir_p(GEN)
+
+# mode: 'wb' -> Windows host'ta Ruby'nin \n -> \r\n cevirmesini engeller.
+# CRLF, bash'in bu dosyalari source etmesini bozar.
+File.write(File.join(GEN, 'hosts.fragment'),
+  ALL_NODES.map { |n| "#{n[:ip]}\t#{n[:name]}.#{DOMAIN} #{n[:name]}" }.join("\n") + "\n",
+  mode: 'wb')
+
+MP    = CONF['haproxy']['metrics_proxy']
+MP_ON = CONF['haproxy']['enabled'] && MP && MP['enabled']
+
+shared_env = {
+  'CLUSTER_NAME'         => CLUSTER,
+  'DOMAIN'               => DOMAIN,
+  'NETWORK_PREFIX'       => PREFIX,
+  'SELINUX_MODE'         => CONF['selinux_mode'],
+  'PG_MAJOR'             => CONF['postgres']['major'].to_s,
+  'PATRONI_VERSION'      => CONF['patroni']['version'],
+  'ETCD_VERSION'         => CONF['etcd']['version'],
+  'ETCD_INITIAL_CLUSTER' => etcd_nodes.map { |n| "#{n[:name]}=http://#{n[:ip]}:2380" }.join(','),
+  'ETCD_ENDPOINTS'       => etcd_nodes.map { |n| "#{n[:ip]}:2379" }.join(','),
+  'PG_NODE_LIST'         => pg_nodes.map  { |n| "#{n[:name]}:#{n[:ip]}" }.join(','),
+  'NODE_EXPORTER_VERSION'=> CONF['node_exporter']['version'],
+  'NODE_EXPORTER_PORT'   => CONF['node_exporter']['port'].to_s,
+  'POSTGRES_EXPORTER_VERSION' => CONF['postgres_exporter']['version'],
+  'POSTGRES_EXPORTER_PORT'    => CONF['postgres_exporter']['port'].to_s,
+  'PGEXPORTER_PASSWORD'  => CONF['passwords']['pgexporter'],
+  'NODE_EXPORTER_ENABLED'     => CONF['node_exporter']['enabled'].to_s,
+  'POSTGRES_EXPORTER_ENABLED' => CONF['postgres_exporter']['enabled'].to_s,
+  'METRICS_PROXY'             => MP_ON.to_s,
+  'METRICS_PROXY_NODE_BASE'     => (MP ? MP['node_base'].to_s     : ''),
+  'METRICS_PROXY_POSTGRES_BASE' => (MP ? MP['postgres_base'].to_s : ''),
+  'METRICS_PROXY_PATRONI_BASE'  => (MP ? MP['patroni_base'].to_s  : ''),
+  'SUPERUSER_PASSWORD'   => CONF['passwords']['superuser'],
+  'REPLICATION_PASSWORD' => CONF['passwords']['replication'],
+  'REWIND_PASSWORD'      => CONF['passwords']['rewind'],
+  'PATRONI_REST_PASSWORD'=> CONF['passwords']['patroni_rest']
+}
+
+File.write(File.join(GEN, 'cluster.env'),
+  shared_env.map { |k, v| "export #{k}='#{v}'" }.join("\n") + "\n",
+  mode: 'wb')
+
+# --- hazir Prometheus scrape config ----------------------------------------
+if CONF['node_exporter']['enabled'] || CONF['postgres_exporter']['enabled']
+  hap_ip = lb_nodes.empty? ? nil : lb_nodes.first[:ip]
+
+  # metrics_proxy acikken tek adres (haproxy) + kaydirilmis portlar,
+  # kapaliyken node'un kendi IP'si + gercek port kullanilir.
+  target_for = lambda { |node, idx, real_port, base|
+    if MP_ON && hap_ip
+      "#{hap_ip}:#{base + idx}"
+    else
+      "#{node[:ip]}:#{real_port}"
+    end
+  }
+
+  job = lambda { |lines, name, nodes, real_port, base|
+    lines << ""
+    lines << "  - job_name: '#{CLUSTER}-#{name}'"
+    lines << "    static_configs:"
+    nodes.each_with_index do |n, i|
+      lines << "      - targets: ['#{target_for.call(n, i + 1, real_port, base)}']"
+      lines << "        labels:"
+      lines << "          instance: '#{n[:name]}'"
+      lines << "          cluster: '#{CLUSTER}'"
+      lines << "          role: '#{n[:role]}'"
+    end
+  }
+
+  lines = []
+  lines << "# patroni-vagrant tarafindan uretildi - mevcut prometheus.yml'a ekleyin"
+  mp_note = MP_ON ? 'acik (hedefler haproxy uzerinden)' : 'kapali (dogrudan node)'
+  lines << "# metrics_proxy: #{mp_note}"
+  lines << "scrape_configs:"
+
+  if CONF['node_exporter']['enabled']
+    ne_nodes = ALL_NODES.select { |n| CONF['node_exporter']['roles'].include?(n[:role]) }
+    # proxy yalnizca pg node'lari icin tanimli; diger roller dogrudan scrape edilir
+    if MP_ON
+      job.call(lines, 'node', ne_nodes.select { |n| n[:role] == 'pg' },
+               CONF['node_exporter']['port'], MP['node_base'])
+      other = ne_nodes.reject { |n| n[:role] == 'pg' }
+      unless other.empty?
+        lines << ""
+        lines << "  - job_name: '#{CLUSTER}-node-direct'"
+        lines << "    static_configs:"
+        other.each do |n|
+          lines << "      - targets: ['#{n[:ip]}:#{CONF['node_exporter']['port']}']"
+          lines << "        labels:"
+          lines << "          instance: '#{n[:name]}'"
+          lines << "          cluster: '#{CLUSTER}'"
+          lines << "          role: '#{n[:role]}'"
+        end
+      end
+    else
+      job.call(lines, 'node', ne_nodes, CONF['node_exporter']['port'], 0)
+    end
+  end
+
+  if CONF['postgres_exporter']['enabled']
+    job.call(lines, 'postgres', pg_nodes,
+             CONF['postgres_exporter']['port'], MP_ON ? MP['postgres_base'] : 0)
+  end
+
+  # Patroni 2.1+ REST API uzerinden Prometheus metrikleri sunar
+  job.call(lines, 'patroni', pg_nodes, 8008, MP_ON ? MP['patroni_base'] : 0)
+
+  File.write(File.join(GEN, 'prometheus-scrape.yml'), lines.join("\n") + "\n", mode: 'wb')
+end
+
+# ---------------------------------------------------------------------------
+Vagrant.configure('2') do |config|
+  config.vm.box = CONF['box']
+  config.vm.box_check_update = false
+  config.ssh.insert_key = true
+
+  if Vagrant.has_plugin?('vagrant-vbguest')
+    config.vbguest.auto_update = false
+  end
+
+  ALL_NODES.each_with_index do |node, idx|
+    # son node -> "vagrant up" sirasinda provisioning'i tetikleyecek olan
+    config.vm.define node[:name], primary: (node[:name] == 'pg1') do |vm|
+      vm.vm.hostname = "#{node[:name]}.#{DOMAIN}"
+      vm.vm.network 'private_network', ip: node[:ip]
+
+      # HAProxy portlarini host'a yonlendir. Vagrant her up/reload'da ag
+      # yapilandirmasini sifirdan kurdugu icin kural burada tanimli olmali;
+      # VirtualBox GUI'den elle eklenenler "Clearing any previously set
+      # network interfaces" adiminda kaybolur.
+      # Bridged adaptor - haproxy VM'i dogrudan LAN'da gorunur
+      if node[:role] == 'haproxy' && CONF['haproxy'].dig('bridge', 'enabled')
+        br   = CONF['haproxy']['bridge']
+        opts = {}
+        opts[:bridge] = br['interface'] unless br['interface'].to_s.empty?
+        unless br['ip'].to_s.empty?
+          opts[:ip] = br['ip']
+          opts[:netmask] = br['netmask'] || '255.255.255.0'
+        end
+        vm.vm.network 'public_network', **opts
+      end
+
+      if node[:role] == 'haproxy' && CONF['haproxy']['forward_ports']
+        offset  = CONF['haproxy']['forward_offset'].to_i
+        host_ip = CONF['haproxy']['forward_host_ip']
+        {
+          'pg-write'      => 5000,
+          'pg-read'       => 5001,
+          'haproxy-stats' => 7000
+        }.each do |pid, port|
+          vm.vm.network 'forwarded_port',
+            guest: port, host: port + offset,
+            host_ip: host_ip, id: pid, auto_correct: true
+        end
+      end
+
+      vm.vm.provider 'virtualbox' do |vb|
+        vb.name   = "#{CLUSTER}-#{node[:name]}"
+        vb.memory = node[:memory]
+        vb.cpus   = node[:cpus]
+        vb.customize ['modifyvm', :id, '--groups', "/#{CLUSTER}"]
+        vb.customize ['modifyvm', :id, '--ioapic', 'on']
+        vb.customize ['modifyvm', :id, '--nested-hw-virt', 'off']
+      end
+
+      node_env = {
+        'NODE_NAME'       => node[:name],
+        'NODE_IP'         => node[:ip],
+        'NODE_ROLE'       => node[:role],
+        'FIREWALL_PORTS'  => FIREWALL[node[:role]]
+      }
+
+      vm.vm.provision 'common', type: 'shell',
+        path: 'provision/common.sh', env: node_env
+
+      case node[:role]
+      when 'etcd'
+        vm.vm.provision 'etcd', type: 'shell',
+          path: 'provision/etcd.sh', env: node_env
+      when 'pg'
+        vm.vm.provision 'patroni', type: 'shell',
+          path: 'provision/patroni.sh', env: node_env
+      when 'haproxy'
+        vm.vm.provision 'haproxy', type: 'shell',
+          path: 'provision/haproxy.sh', env: node_env
+      end
+
+      if CONF['node_exporter']['enabled'] &&
+         CONF['node_exporter']['roles'].include?(node[:role])
+        vm.vm.provision 'node_exporter', type: 'shell',
+          path: 'provision/node_exporter.sh', env: node_env
+      end
+
+      if CONF['postgres_exporter']['enabled'] && node[:role] == 'pg'
+        vm.vm.provision 'postgres_exporter', type: 'shell',
+          path: 'provision/postgres_exporter.sh', env: node_env
+      end
+    end
+  end
+end

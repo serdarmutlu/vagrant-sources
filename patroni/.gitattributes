@@ -1,0 +1,9 @@
+# Provisioning dosyalari her zaman LF - Windows host'ta CRLF olursa
+# bash "$'\r': command not found" ile patlar.
+*           text=auto eol=lf
+*.sh        text eol=lf
+*.tpl       text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+Vagrantfile text eol=lf
+*.md        text eol=lf

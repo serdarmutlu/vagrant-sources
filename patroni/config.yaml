@@ -1,0 +1,73 @@
+# ---------------------------------------------------------------------------
+# Patroni HA lab - tek yerden ayar
+# ---------------------------------------------------------------------------
+box: "bento/rockylinux-9"
+network_prefix: "192.168.56"     # VirtualBox host-only araligi
+domain: "patroni.lab"
+cluster_name: "pgcluster"
+selinux_mode: "permissive"       # "permissive" | "enforcing"
+
+postgres:
+  major: 17
+
+patroni:
+  version: "4.0.6"
+
+etcd:
+  version: "v3.5.21"
+  count: 3                       # 3 veya 5 (tek sayi)
+  ip_start: 11                   # -> 192.168.56.11,12,13
+  memory: 1024
+  cpus: 1
+
+pg:
+  count: 3
+  ip_start: 21                   # -> 192.168.56.21,22,23
+  memory: 2048
+  cpus: 2
+
+haproxy:
+  enabled: true
+  ip: 30                         # -> 192.168.56.30
+  memory: 512
+  cpus: 1
+  # Host-only IP (192.168.56.30) zaten host'tan erisilebilir. Asagidakiler
+  # sadece host uzerinde localhost:5000 gibi kisayol istiyorsaniz gerekli.
+  forward_ports: true
+  forward_host_ip: "127.0.0.1"   # LAN'daki diger makinelere acmak icin: "0.0.0.0"
+  forward_offset: 0              # host portu dolu ise kaydirin (or. 10 -> 5010)
+
+  # Metrik proxy: pg node'larinin exporter portlarini haproxy uzerinden yayinlar.
+  # Boylece disariya tek bir adres (haproxy) acilir, pg node'lari host-only
+  # aginda kapali kalir. Port haritasi: base + node sirasi (1,2,3...)
+  metrics_proxy:
+    enabled: true
+    node_base: 19100             # 19101 -> pg1:9100, 19102 -> pg2:9100 ...
+    postgres_base: 19180         # 19181 -> pg1:9187 ...
+    patroni_base: 19200          # 19201 -> pg1:8008 (sadece GET /metrics)
+
+  # Bridged adaptor: VM dogrudan LAN'a cikar, host araya girmez.
+  # Baska makinelerden erisim icin en temiz yol budur.
+  bridge:
+    enabled: false
+    interface: ""                # or. "Intel(R) Wi-Fi 6 AX201"; bos ise vagrant sorar
+    ip: ""                       # or. "192.168.1.30"; bos ise router DHCP verir
+
+node_exporter:
+  enabled: true
+  version: "1.12.1"
+  port: 9100
+  roles: ["pg"]                  # ["pg", "etcd", "haproxy"] de yazilabilir
+
+postgres_exporter:               # sadece pg node'larina kurulur
+  enabled: true
+  version: "0.20.1"
+  port: 9187
+
+# Lab sifreleri - gercek ortamda vault/env'den besleyin
+passwords:
+  superuser: "Postgres!2024"
+  replication: "Replicator!2024"
+  rewind: "Rewind!2024"
+  patroni_rest: "PatroniRest!2024"
+  pgexporter: "PgExporter!2024"
