@@ -13,6 +13,10 @@ Kurulumun tamamı kabuk betikleriyle, elle müdahale olmadan yapılır: sessiz (
 Infrastructure ve Database kurulumları, RU yamaları, `dbca`, `RMAN DUPLICATE ... FOR
 STANDBY FROM ACTIVE DATABASE` ve `dgmgrl` ile broker yapılandırması.
 
+> Bu dizindeki Vagrant betikleri, Tim Hall'ın (Oracle-Base)
+> [oraclebase/vagrant](https://github.com/oraclebase/vagrant) çalışması baz alınarak
+> hazırlanmıştır. Ayrıntı için [Kaynak ve teşekkür](#kaynak-ve-teşekkür) bölümüne bakın.
+
 ---
 
 ## Kurulan ortam
@@ -260,3 +264,21 @@ Neredeyse her şey koda değil, yapılandırmaya gömülüdür:
 Buradaki bir değeri değiştirmek tüm betiklere yansır; çünkü her betik ilk satırında
 `/vagrant_config/install.env` dosyasını yükler. `vagrant.yml` ve `install.env` içindeki IP
 adreslerinin elle senkron tutulduğunu unutmayın — ikisini birden güncelleyin.
+
+---
+
+## Kaynak ve teşekkür
+
+Bu Vagrant yapılandırmaları, Tim Hall'ın (Oracle-Base) Vagrant deposundan yola çıkılarak
+hazırlanmıştır:
+
+* <https://github.com/oraclebase/vagrant>
+* <https://oracle-base.com/articles/vm/vagrant-oracle-database-builds>
+
+Genel yapı — `vagrant.yml` ve `install.env` dosyalarını barındıran `config/` dizini,
+`shared_scripts/` ile makineye özel `scripts/` ayrımı, sessiz Grid Infrastructure /
+Database kurulum akışı ve `oraclebase/oracle-9` box'ı — oradan gelmektedir. Bu
+laboratuvar bunun üzerine 2 düğümlü RAC + Data Guard fiziksel yedek topolojisini, DNS
+makinesini, RU/OJVM yamalarını ve yedek kurulum/onarım betiklerini ekler.
+
+Bu çalışmayı yayımladığı ve sürdürdüğü için Tim Hall'a teşekkürler.

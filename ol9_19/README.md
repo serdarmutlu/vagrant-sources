@@ -12,6 +12,10 @@ Everything is provisioned unattended by shell scripts — silent Grid Infrastruc
 Database installs, RU patching, `dbca`, an RMAN `DUPLICATE ... FOR STANDBY FROM ACTIVE
 DATABASE`, and a `dgmgrl` broker configuration.
 
+> The Vagrant scripts in this directory are based on Tim Hall's (Oracle-Base)
+> [oraclebase/vagrant](https://github.com/oraclebase/vagrant) builds. See
+> [Credits](#credits) for details.
+
 ---
 
 ## What gets built
@@ -255,3 +259,20 @@ Almost everything is data, not code:
 Change a value there and it propagates to every script, because each script sources
 `/vagrant_config/install.env` as its first line. Note that the IPs in `vagrant.yml` and
 `install.env` are kept in sync manually — change both.
+
+---
+
+## Credits
+
+These Vagrant builds are derived from Tim Hall's (Oracle-Base) Vagrant repository:
+
+* <https://github.com/oraclebase/vagrant>
+* <https://oracle-base.com/articles/vm/vagrant-oracle-database-builds>
+
+The overall layout — a `config/` directory holding `vagrant.yml` and `install.env`, the
+`shared_scripts/` + per-VM `scripts/` split, the silent Grid Infrastructure / Database
+install flow, and the `oraclebase/oracle-9` box — comes from there. This lab adds the
+2-node RAC + Data Guard physical standby topology, the DNS VM, RU/OJVM patching and the
+standby build and repair scripts on top of it.
+
+Thanks to Tim Hall for publishing and maintaining that work.
