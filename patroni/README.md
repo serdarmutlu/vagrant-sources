@@ -1,11 +1,13 @@
 # Patroni HA Lab — Vagrant + VirtualBox + Rocky Linux 9
 
-etcd (3) + PostgreSQL/Patroni (3) + HAProxy (1) topolojisini tek komutla ayağa
-kaldırır. Her servis kendi VM'inde çalışır.
+*[Türkçe sürüm için: README.tr.md](README.tr.md)*
+
+Brings up an etcd (3) + PostgreSQL/Patroni (3) + HAProxy (1) topology with a single
+command. Each service runs in its own VM.
 
 ```
                     ┌──────────────┐
-   uygulama ───────▶│   haproxy    │  :5000 → leader (write)
+   application ────▶│   haproxy    │  :5000 → leader (write)
                     │ .56.30       │  :5001 → replica (read)
                     └──────┬───────┘  :7000 → stats
                            │
@@ -17,25 +19,25 @@ kaldırır. Her servis kendi VM'inde çalışır.
      etcd1 .11   etcd2 .12      etcd3 .13
 ```
 
-## Gereksinimler
+## Requirements
 
 - Vagrant ≥ 2.4, VirtualBox ≥ 7.0
-- ~10 GB boş RAM (3×1024 + 3×2048 + 512)
-- VirtualBox host-only ağında `192.168.56.0/24` izinli olmalı
+- ~10 GB free RAM (3×1024 + 3×2048 + 512)
+- `192.168.56.0/24` must be allowed on the VirtualBox host-only network
   (`/etc/vbox/networks.conf` → `* 192.168.56.0/21`)
 
-## Kullanım
+## Usage
 
 ```bash
-vagrant up                 # sırayla etcd → pg → haproxy
+vagrant up                 # in order: etcd → pg → haproxy
 vagrant status
 ```
 
-Ayarların tamamı `config.yaml` içinde: box, PostgreSQL major sürümü, Patroni ve
-etcd sürümleri, node sayıları, IP aralığı, RAM/CPU, şifreler. Vagrantfile bu
-dosyayı okuyup `.generated/` altına ortak env ve hosts fragment'ı üretir.
+Every setting lives in `config.yaml`: box, PostgreSQL major version, Patroni and etcd
+versions, node counts, IP range, RAM/CPU, passwords. The Vagrantfile reads that file and
+generates a shared env file and a hosts fragment under `.generated/`.
 
-## Doğrulama
+## Verification
 
 ```bash
 vagrant ssh pg1 -c "patronictl list"
@@ -51,7 +53,7 @@ vagrant ssh pg1 -c "patronictl list"
 +--------+------------------+---------+-----------+----+-----------+
 ```
 
-Host'tan bağlantı:
+Connecting from the host:
 
 ```bash
 psql "host=192.168.56.30 port=5000 user=postgres dbname=postgres"   # write
@@ -60,21 +62,20 @@ psql "host=192.168.56.30 port=5001 user=postgres dbname=postgres"   # read
 
 ## Prometheus
 
-`config.yaml` içindeki `node_exporter.roles` listesindeki node'lara node_exporter
-kurulur (varsayılan: sadece `pg`). `vagrant up` her çalıştığında hazır bir scrape
-config üretilir:
+node_exporter is installed on the nodes listed in `node_exporter.roles` in `config.yaml`
+(default: `pg` only). Every `vagrant up` regenerates a ready-to-use scrape config:
 
 ```
 .generated/prometheus-scrape.yml
 ```
 
-İçeriğini mevcut `prometheus.yml`'ınızın `scrape_configs:` bloğuna ekleyip
-Prometheus'u reload edin. Üç job gelir:
+Paste its contents into the `scrape_configs:` block of your existing `prometheus.yml` and
+reload Prometheus. Three jobs are produced:
 
-| Job | Port | Kaynak |
+| Job | Port | Source |
 |---|---|---|
-| `<cluster>-node` | 9100 | node_exporter — CPU, bellek, disk, systemd unit durumları |
-| `<cluster>-postgres` | 9187 | postgres_exporter — `pg_stat_statements`, bloat, lock, replikasyon |
+| `<cluster>-node` | 9100 | node_exporter — CPU, memory, disk, systemd unit states |
+| `<cluster>-postgres` | 9187 | postgres_exporter — `pg_stat_statements`, bloat, locks, replication |
 | `<cluster>-patroni` | 8008 | Patroni REST `/metrics` — `patroni_primary`, `patroni_xlog_*` |
 
 ```bash
@@ -83,168 +84,165 @@ curl -s 192.168.56.21:9187/metrics | grep ^pg_stat_statements
 curl -s 192.168.56.21:8008/metrics | grep ^patroni_primary
 ```
 
-### Metrik proxy
+### Metrics proxy
 
-`haproxy.metrics_proxy.enabled: true` iken pg node'larının exporter portları
-HAProxy üzerinden yayınlanır. Dışarıya tek bir adres açılır; etcd ve PostgreSQL
-node'ları host-only ağında kapalı kalır.
+With `haproxy.metrics_proxy.enabled: true`, the exporter ports of the pg nodes are
+published through HAProxy. Only one address is exposed to the outside; the etcd and
+PostgreSQL nodes stay closed on the host-only network.
 
-| Hedef | Proxy portu | Arka uç |
+| Target | Proxy port | Backend |
 |---|---|---|
 | node_exporter | 19101 / 19102 / 19103 | pg1-3 : 9100 |
 | postgres_exporter | 19181 / 19182 / 19183 | pg1-3 : 9187 |
 | Patroni `/metrics` | 19201 / 19202 / 19203 | pg1-3 : 8008 |
 
-Port haritası `base + node sırası`. `.generated/prometheus-scrape.yml` bu
-haritaya göre üretilir, `instance` etiketi yine `pg1`/`pg2`/`pg3` olarak gelir.
-Bir node düştüğünde HAProxy 503 döndüğü için Prometheus `up=0` görür, yani
-semantik bozulmaz.
+The port map is `base + node index`. `.generated/prometheus-scrape.yml` is generated from
+that map, and the `instance` label still comes through as `pg1`/`pg2`/`pg3`. When a node
+goes down HAProxy returns 503, so Prometheus sees `up=0` — the semantics are preserved.
 
-Patroni listener'ları sadece `GET /metrics` geçirir:
+The Patroni listeners only pass `GET /metrics`:
 
 ```
 http-request deny unless { method GET } { path /metrics }
 ```
 
-Bu olmadan REST API'nin `POST /switchover`, `POST /restart` uçları da dışarıya
-açılmış olurdu.
+Without this, the REST API's `POST /switchover` and `POST /restart` endpoints would be
+exposed as well.
 
-Dikkat edilmesi gereken tek nokta: HAProxy düşerse üç node'un metriği birden
-kaybolur. Tek bir proxy üzerinden gittiği için bunu ayrı bir alert ile takip
-etmek isteyebilirsiniz (`up{job="<cluster>-patroni"} == 0` hepsi aynı anda).
+The one thing to watch: if HAProxy goes down, the metrics of all three nodes disappear at
+once. Since everything goes through a single proxy, you may want a separate alert for it
+(`up{job="<cluster>-patroni"} == 0` for all of them simultaneously).
 
-Proxy'yi kapatırsanız (`enabled: false`) scrape config hedefleri otomatik olarak
-node'ların kendi IP'lerine ve gerçek portlarına döner.
+If you turn the proxy off (`enabled: false`), the scrape config targets automatically fall
+back to the nodes' own IPs and real ports.
 
 ### pg_stat_statements
 
-`shared_preload_libraries` ve `pg_stat_statements.*` parametreleri bootstrap
-şablonunda tanımlı; eklenti `postgres_exporter.sh` tarafından leader üzerinde
-`CREATE EXTENSION IF NOT EXISTS` ile kuruluyor ve fiziksel replikasyonla
-standby'lara geçiyor.
+`shared_preload_libraries` and the `pg_stat_statements.*` parameters are defined in the
+bootstrap template; the extension itself is created on the leader by
+`postgres_exporter.sh` with `CREATE EXTENSION IF NOT EXISTS` and reaches the standbys
+through physical replication.
 
-Cluster zaten ayaktaysa GUC'lar DCS'e sonradan eklenmeli:
+If the cluster is already running, the GUCs have to be added to the DCS afterwards:
 
 ```bash
 vagrant ssh pg1 -c "patronictl edit-config --force \
   -s 'postgresql.parameters.pg_stat_statements.max=10000' \
   -s 'postgresql.parameters.pg_stat_statements.track=top'"
-vagrant ssh pg1 -c "patronictl restart pgcluster --force"   # .max restart ister
+vagrant ssh pg1 -c "patronictl restart pgcluster --force"   # .max requires a restart
 ```
 
-`pgexporter` rolü `pg_monitor` üyesidir; `pg_stat_statements` view'ında diğer
-kullanıcıların sorgularını görmek için bu yeterlidir. Sorgu metnini metriklere
-eklemek isterseniz servis dosyasına `--collector.stat_statements.include_query`
-ekleyin — kardinaliteyi ciddi şekilde artırır.
+The `pgexporter` role is a member of `pg_monitor`, which is enough to see other users'
+queries in the `pg_stat_statements` view. If you want the query text in the metrics as
+well, add `--collector.stat_statements.include_query` to the service file — it increases
+cardinality significantly.
 
-Prometheus başka bir makinedeyse `192.168.56.0/24` host-only ağına erişemez;
-VirtualBox host'undan reverse proxy ya da bridged adaptör gerekir.
+If Prometheus runs on another machine it cannot reach the `192.168.56.0/24` host-only
+network; you need a reverse proxy on the VirtualBox host, or a bridged adapter.
 
 HAProxy stats: <http://192.168.56.30:7000/>
 
-### Host'tan erişim
+### Access from the host
 
-Host-only adaptör iki yönlü çalışır, yani `192.168.56.30` doğrudan host'tan
-erişilebilir; ekstra bir şey gerekmez. Buna ek olarak `config.yaml` içindeki
-`haproxy.forward_ports: true` ile 5000/5001/7000 portları host'un
-`127.0.0.1`'ine de yönlendirilir:
+The host-only adapter works both ways, so `192.168.56.30` is directly reachable from the
+host with no extra setup. On top of that, `haproxy.forward_ports: true` in `config.yaml`
+also forwards ports 5000/5001/7000 to the host's `127.0.0.1`:
 
 ```bash
 psql "host=127.0.0.1 port=5000 user=postgres dbname=postgres"
 ```
 
-VirtualBox arayüzünden elle eklenen NAT kuralları kalıcı olmaz: Vagrant her
-`up`/`reload` işleminde "Clearing any previously set network interfaces" adımıyla
-ağ yapılandırmasını kendi tanımından yeniden kurar. Kural bu yüzden Vagrantfile'da
-durmalı.
+NAT rules added by hand through the VirtualBox GUI do not survive: on every `up`/`reload`
+Vagrant rebuilds the network configuration from its own definition in the "Clearing any
+previously set network interfaces" step. That is why the rule has to live in the
+Vagrantfile.
 
-Host portu başka bir servis tarafından kullanılıyorsa `forward_offset` verin
+If the host port is already taken by another service, set `forward_offset`
 (`10` → 5010/5011/7010).
 
-### Ağdaki diğer makinelerden erişim
+### Access from other machines on the network
 
-İki yol var:
+There are two ways:
 
-**NAT yönlendirmesini tüm arayüzlere açmak.** `forward_host_ip: "0.0.0.0"` yapıp
-`vagrant reload haproxy`. İstemciler host'un LAN IP'sine bağlanır. Windows'ta
-güvenlik duvarı kuralı gerekir:
+**Open the NAT forwarding on all interfaces.** Set `forward_host_ip: "0.0.0.0"` and run
+`vagrant reload haproxy`. Clients then connect to the host's LAN IP. On Windows a firewall
+rule is required:
 
 ```powershell
 New-NetFirewallRule -DisplayName "Patroni HAProxy" -Direction Inbound `
   -Protocol TCP -LocalPort 5000,5001,7000 -Action Allow -Profile Private
 ```
 
-**Bridged adaptör (önerilen).** HAProxy VM'i router'dan kendi IP'sini alır, host
-aradan çıkar:
+**Bridged adapter (recommended).** The HAProxy VM gets its own IP from the router and the
+host is out of the path:
 
 ```yaml
 haproxy:
   bridge:
     enabled: true
-    interface: "Intel(R) Wi-Fi 6 AX201"   # `VBoxManage list bridgedifs` ile bakın
-    ip: "192.168.1.30"                    # DHCP havuzunun DIŞINDA bir adres
+    interface: "Intel(R) Wi-Fi 6 AX201"   # check with `VBoxManage list bridgedifs`
+    ip: "192.168.1.30"                    # an address OUTSIDE the DHCP pool
 ```
 
-`vagrant reload haproxy` sonrası istemciler doğrudan `192.168.1.30:5000`'e
-bağlanır. Host kapalıyken de çalışır, güvenlik duvarı kuralı gerekmez ve
-`pg_stat_activity.client_addr` gerçek istemciyi gösterir. `interface` boş
-bırakılırsa Vagrant açılışta hangi adaptörün köprüleneceğini sorar; `ip` boş
-bırakılırsa router DHCP verir (adres değişebilir).
+After `vagrant reload haproxy`, clients connect straight to `192.168.1.30:5000`. It keeps
+working while the host is off, needs no firewall rule, and `pg_stat_activity.client_addr`
+shows the real client. If `interface` is left empty, Vagrant asks at boot which adapter to
+bridge; if `ip` is left empty, the router hands out DHCP (the address can change).
 
-Kablosuz bağlantılarda bazı sürücüler bridged moda izin vermez; o durumda birinci
-yönteme dönün.
+Some wireless drivers do not allow bridged mode; in that case fall back to the first
+method.
 
-## Test senaryoları
+## Test scenarios
 
 ```bash
-# Planlı switchover
+# Planned switchover
 vagrant ssh pg1 -c "patronictl switchover --leader pg1 --candidate pg2 --force"
 
-# Failover (leader'ı sert kapat)
+# Failover (hard-stop the leader)
 vagrant halt pg1 -f
 vagrant ssh pg2 -c "patronictl list"
 
-# Eski leader'ı geri al → pg_rewind ile replica olarak döner
+# Bring the old leader back → it rejoins as a replica via pg_rewind
 vagrant up pg1
 vagrant ssh pg1 -c "journalctl -u patroni -n 50 --no-pager"
 
-# etcd quorum kaybı (2/3 düşür → cluster read-only'ye geçer)
+# Loss of etcd quorum (take down 2 of 3 → the cluster goes read-only)
 vagrant halt etcd2 etcd3
 
-# Parametre değişikliği (tüm cluster'a dağıtılır)
+# Parameter change (distributed across the whole cluster)
 vagrant ssh pg1 -c "patronictl edit-config -s 'max_connections=300'"
 vagrant ssh pg1 -c "patronictl restart pgcluster --force"
 
-# Senkron replikasyon
+# Synchronous replication
 vagrant ssh pg1 -c "patronictl edit-config -s 'synchronous_mode=true'"
 ```
 
-## Yeniden provisioning
+## Re-provisioning
 
 ```bash
-vagrant provision pg2                      # tüm adımlar
+vagrant provision pg2                      # all steps
 vagrant provision pg2 --provision-with patroni
-vagrant destroy -f && vagrant up           # sıfırdan
+vagrant destroy -f && vagrant up           # from scratch
 ```
 
-`etcd.sh` mevcut `member/` dizinini görürse `initial-cluster-state: existing`
-ile yazar, böylece tekrar provision cluster'ı bozmaz.
+If `etcd.sh` finds an existing `member/` directory it writes
+`initial-cluster-state: existing`, so re-provisioning does not break the cluster.
 
-## Lab kısayolları vs. production farkları
+## Lab shortcuts vs. production
 
-Bilinçli olarak basitleştirilen noktalar:
+Points that are deliberately simplified:
 
-| Konu | Burada | Production'da |
+| Topic | Here | In production |
 |---|---|---|
 | SELinux | `permissive` (`config.yaml`) | `enforcing` + policy |
-| etcd | düz HTTP, auth yok | mTLS + RBAC |
-| Patroni REST | HTTP, sadece unsafe metodlarda auth | TLS + client cert |
+| etcd | plain HTTP, no auth | mTLS + RBAC |
+| Patroni REST | HTTP, auth only on unsafe methods | TLS + client cert |
 | `archive_command` | `/bin/true` | pgBackRest / WAL-G |
-| PGDATA | root diskte | ayrı LVM/disk |
-| Şifreler | `config.yaml` düz metin | Vault / env |
-| `synchronous_mode` | kapalı | veri kaybı toleransına göre açık |
+| PGDATA | on the root disk | separate LVM/disk |
+| Passwords | plain text in `config.yaml` | Vault / env |
+| `synchronous_mode` | off | on, depending on data-loss tolerance |
 
-## Sorun giderme
+## Troubleshooting
 
 ```bash
 vagrant ssh etcd1 -c "sudo systemctl status etcd; sudo journalctl -u etcd -n 50 --no-pager"
@@ -254,39 +252,38 @@ vagrant ssh pg1   -c "curl -s localhost:8008/patroni | jq"
 vagrant ssh pg1   -c "sudo tail -50 /var/lib/pgsql/17/data/log/postgresql-*.log"
 ```
 
-> Patroni `log.dir: /var/log/patroni` ile yapılandırıldığı için stderr'e
-> yazmaz; `journalctl -u patroni` yalnızca "Started" satırını gösterir.
-> Gerçek log **`/var/log/patroni/patroni.log`** içindedir. journald'de görmek
-> isterseniz `patroni.yml`'daki `log:` bloğunu kaldırın.
+> Because Patroni is configured with `log.dir: /var/log/patroni` it does not write to
+> stderr; `journalctl -u patroni` only shows the "Started" line. The real log is in
+> **`/var/log/patroni/patroni.log`**. If you want it in journald, remove the `log:` block
+> from `patroni.yml`.
 
-Sık karşılaşılanlar:
+Common problems:
 
-- **`vagrant up` private_network hatası** → VirtualBox 7 sadece
-  `192.168.56.0/21` aralığına izin verir; `/etc/vbox/networks.conf` kontrol edin.
-- **Patroni başlıyor ama leader seçilmiyor** → etcd quorum yok. `etcdctl
-  endpoint health` ile 2/3 üye ayakta mı bakın.
-- **`/dev/watchdog` permission denied** → `modprobe softdog` sonrası udev
-  kuralı uygulanmamış olabilir; `patroni.yml` içinde `watchdog.mode: off`
-  yapıp geçebilirsiniz.
-- **`nothing provides perl(IPC::Run)`** → CRB deposu kapalı ve dnf `libpq-devel`'i
-  PGDG'deki `postgresqlXX-devel` ile karşılamaya çalışıyor. `patroni.sh` artık
-  CRB'yi açıyor ve `libpq-devel`/`gcc` kurmuyor; eski sürümdeyseniz güncelleyin.
-- **`vagrant up` tekrar çalıştırınca "Machine already provisioned"** → provisioning
-  hata verse de Vagrant makineyi işaretliyor. `vagrant up --provision` ya da
-  tek tek `vagrant provision pg1` kullanın.
-- **`AttributeError: 'bool' object has no attribute 'read'`** → `basebackup`
-  dict formunda boolean değer var (ör. `verbose: true`). Patroni her değeri
-  `shlex.split()`'ten geçirdiği için string olmayan değerler patlar. Bayrak
-  seçenekleri liste formunda çıplak eleman olarak verilmeli.
-- **Replica `creating replica` durumunda takılı** → `basebackup` sırasında
-  firewall 5432'yi kapatıyor olabilir.
+- **`vagrant up` fails on private_network** → VirtualBox 7 only allows the
+  `192.168.56.0/21` range; check `/etc/vbox/networks.conf`.
+- **Patroni starts but no leader is elected** → no etcd quorum. Check with `etcdctl
+  endpoint health` whether 2 of 3 members are up.
+- **`/dev/watchdog` permission denied** → the udev rule may not have been applied after
+  `modprobe softdog`; you can work around it with `watchdog.mode: off` in `patroni.yml`.
+- **`nothing provides perl(IPC::Run)`** → the CRB repository is disabled and dnf is trying
+  to satisfy `libpq-devel` with `postgresqlXX-devel` from PGDG. `patroni.sh` now enables
+  CRB and does not install `libpq-devel`/`gcc`; update if you are on an older version.
+- **"Machine already provisioned" when re-running `vagrant up`** → Vagrant marks the
+  machine even if provisioning failed. Use `vagrant up --provision`, or
+  `vagrant provision pg1` per node.
+- **`AttributeError: 'bool' object has no attribute 'read'`** → there is a boolean value in
+  the dict form of `basebackup` (e.g. `verbose: true`). Patroni passes every value through
+  `shlex.split()`, so non-string values blow up. Flag-style options must be given as bare
+  elements in list form.
+- **A replica is stuck in `creating replica`** → the firewall may be blocking 5432 during
+  `basebackup`.
 
-## Dosya yapısı
+## File layout
 
 ```
 .
-├── Vagrantfile               # topolojiyi config.yaml'dan üretir
-├── config.yaml               # tek ayar noktası
+├── Vagrantfile               # builds the topology from config.yaml
+├── config.yaml               # the single place to configure everything
 ├── provision/
 │   ├── common.sh             # hosts, SELinux, sysctl, firewalld, chrony
 │   ├── etcd.sh               # etcd binary + config + systemd
@@ -297,5 +294,5 @@ Sık karşılaşılanlar:
 │   └── templates/
 │       ├── patroni.yml.tpl
 │       └── haproxy.cfg.tpl
-└── .generated/               # vagrant tarafından üretilir (git'e koymayın)
+└── .generated/               # produced by vagrant (do not commit)
 ```
