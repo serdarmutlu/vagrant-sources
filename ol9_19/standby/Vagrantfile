@@ -1,0 +1,46 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+require 'yaml'
+
+# Variables
+params = YAML.load_file '../config/vagrant.yml'
+var_box            = params['shared']['box']
+var_non_rotational = params['shared']['non_rotational']
+
+var_vm_name        = params['standby']['vm_name']
+var_mem_size       = params['standby']['mem_size']
+var_cpus           = params['standby']['cpus']
+var_public_ip      = params['standby']['public_ip']
+var_u01_disk       = params['standby']['u01_disk']
+var_u01_disk_size  = params['standby']['u01_disk_size']
+
+Vagrant.configure("2") do |config|
+  config.vm.box = var_box
+
+  config.vm.network "forwarded_port", guest: 1521, host: 1523
+  config.vm.network "forwarded_port", guest: 5500, host: 5503
+
+  # Only the public (host-only) network. No interconnect, no shared disks.
+  config.vm.network "private_network", ip: var_public_ip
+
+  config.vm.synced_folder "../config",         "/vagrant_config"
+  config.vm.synced_folder "../shared_scripts", "/vagrant_scripts"
+  config.vm.synced_folder "../software",       "/vagrant_software"
+
+  config.vm.provider "virtualbox" do |vb|
+    vb.memory = var_mem_size
+    vb.cpus   = var_cpus
+    vb.name   = var_vm_name
+
+    vb.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', '0', '--nonrotational', var_non_rotational]
+
+    unless File.exist?(var_u01_disk)
+      vb.customize ['createhd', '--filename', var_u01_disk, '--size', var_u01_disk_size * 1024]
+    end
+    vb.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', 1, '--device', 0, '--type', 'hdd', '--medium', var_u01_disk, '--nonrotational', var_non_rotational]
+  end
+
+  config.vm.provision "shell", inline: <<-SHELL
+    sh /vagrant/scripts/setup.sh
+  SHELL
+end
