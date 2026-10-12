@@ -1,0 +1,48 @@
+# Cluster: WITH node_exporter. Single source of truth for this lab.
+# Keep passwords simple (no quotes / $ / backslash).
+cluster_name: pgrepl-ne
+box: bento/rockylinux-9
+
+network:
+  # VirtualBox 7 only allows 192.168.56.0/21 for host-only networks
+  subnet: 192.168.56.0/24
+
+postgres:
+  version: 17
+  port: 5432
+  password: postgres123          # superuser 'postgres' (remote access from lab subnet)
+
+replication:
+  user: replicator
+  password: repl123
+  slot: standby_slot             # physical replication slot, created on primary
+  standby_app_name: standby1     # application_name seen in pg_stat_replication
+  synchronous: false             # true => synchronous_standby_names = FIRST 1 (standby1)
+
+app:
+  db: appdb
+  user: appuser
+  password: app123
+
+monitoring:
+  node_exporter:
+    enabled: true
+    version: 1.12.1
+    port: 9100                   # reachable only from network.subnet (firewalld rich rule)
+
+extensions:
+  # Installs the system_stats_<pg version> RPM (PGDG) on every node, standby included.
+  # CREATE EXTENSION is intentionally left manual.
+  system_stats: true
+
+nodes:
+  - name: pg-primary
+    role: primary
+    ip: 192.168.56.11
+    cpus: 2
+    memory: 2048
+  - name: pg-standby
+    role: standby
+    ip: 192.168.56.12
+    cpus: 2
+    memory: 2048

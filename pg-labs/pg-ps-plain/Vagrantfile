@@ -1,0 +1,62 @@
+# -*- mode: ruby -*-
+# PostgreSQL streaming replication lab: 1 primary + 1 hot standby, PLAIN (no node_exporter)
+# (Rocky Linux 9, VirtualBox)
+require 'yaml'
+
+CFG   = YAML.load_file(File.join(__dir__, 'config.yaml'))
+PG    = CFG['postgres']
+REPL  = CFG['replication']
+APP   = CFG['app']
+EXTS  = CFG['extensions'] || {}
+NODES = CFG['nodes']
+
+PRIMARY = NODES.find { |n| n['role'] == 'primary' } || abort('config.yaml: no node with role "primary"')
+abort('config.yaml: no node with role "standby"') unless NODES.any? { |n| n['role'] == 'standby' }
+
+# Scripts are passed inline with CRLF stripped, so a Windows checkout cannot break them.
+def script(name)
+  File.read(File.join(__dir__, 'provision', name), mode: 'r:UTF-8').gsub("\r\n", "\n")
+end
+
+Vagrant.configure('2') do |config|
+  config.vm.box = CFG['box']
+  config.vm.synced_folder '.', '/vagrant', disabled: true
+  config.vm.boot_timeout = 600
+
+  hosts = NODES.map { |n| "#{n['name']}=#{n['ip']}" }.join(',')
+
+  NODES.each do |node|
+    config.vm.define node['name'], primary: node['role'] == 'primary' do |m|
+      m.vm.hostname = node['name']
+      m.vm.network 'private_network', ip: node['ip']
+
+      m.vm.provider 'virtualbox' do |vb|
+        vb.name         = "#{CFG['cluster_name']}-#{node['name']}"
+        vb.cpus         = node['cpus']
+        vb.memory       = node['memory']
+        vb.linked_clone = true
+      end
+
+      env = {
+        'HOSTS'            => hosts,
+        'SUBNET'           => CFG['network']['subnet'],
+        'PRIMARY_IP'       => PRIMARY['ip'],
+        'PG_VERSION'       => PG['version'].to_s,
+        'PG_PORT'          => PG['port'].to_s,
+        'PG_PASSWORD'      => PG['password'].to_s,
+        'REPL_USER'        => REPL['user'].to_s,
+        'REPL_PASSWORD'    => REPL['password'].to_s,
+        'REPL_SLOT'        => REPL['slot'].to_s,
+        'STANDBY_APP_NAME' => REPL['standby_app_name'].to_s,
+        'SYNC'             => REPL['synchronous'].to_s,
+        'APP_DB'           => APP['db'].to_s,
+        'APP_USER'         => APP['user'].to_s,
+        'APP_PASSWORD'     => APP['password'].to_s,
+        'SYSTEM_STATS'          => EXTS.fetch('system_stats', false).to_s
+      }
+
+      m.vm.provision 'common',        type: 'shell', inline: script('common.sh'), env: env
+      m.vm.provision node['role'],    type: 'shell', inline: script("#{node['role']}.sh"), env: env
+    end
+  end
+end
