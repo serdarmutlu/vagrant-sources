@@ -30,6 +30,10 @@ Vagrant.configure('2') do |config|
     config.vm.define node['name'], primary: node['role'] == 'primary' do |m|
       m.vm.hostname = node['name']
       m.vm.network 'private_network', ip: node['ip']
+      if node['host_port']
+        m.vm.network 'forwarded_port', id: 'postgresql', guest: PG['port'], host: node['host_port'],
+                     host_ip: CFG['network'].fetch('forward_host_ip', '127.0.0.1'), auto_correct: false
+      end
 
       m.vm.provider 'virtualbox' do |vb|
         vb.name         = "#{CFG['cluster_name']}-#{node['name']}"
@@ -41,6 +45,7 @@ Vagrant.configure('2') do |config|
       env = {
         'HOSTS'            => hosts,
         'SUBNET'           => CFG['network']['subnet'],
+        'NAT_GATEWAY'      => CFG['network'].fetch('nat_gateway', '10.0.2.2').to_s,
         'PRIMARY_IP'       => PRIMARY['ip'],
         'PG_VERSION'       => PG['version'].to_s,
         'PG_PORT'          => PG['port'].to_s,

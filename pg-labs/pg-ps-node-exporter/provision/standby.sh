@@ -38,7 +38,17 @@ primary_slot_name = '${REPL_SLOT}'
 EOF
 chown postgres:postgres "${PGDATA}/conf.d/20-standby.conf"
 
+# pg_hba.conf: host port-forwarding clients appear as the VirtualBox NAT gateway
+if ! grep -q "# lab host port-forward" "${PGDATA}/pg_hba.conf"; then
+  cat >> "${PGDATA}/pg_hba.conf" <<EOF
+
+# lab host port-forward
+host    all             all             ${NAT_GATEWAY}/32    scram-sha-256
+EOF
+fi
+
 systemctl enable --now "${SERVICE}"
+systemctl reload "${SERVICE}"
 
 # Wait for streaming
 st=""

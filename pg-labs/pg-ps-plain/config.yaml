@@ -6,6 +6,10 @@ box: bento/rockylinux-9
 network:
   # VirtualBox 7 only allows 192.168.56.0/21 for host-only networks
   subnet: 192.168.56.0/24
+  # Host port forwarding (VirtualBox NAT). Each node's PostgreSQL port is published on the
+  # host at nodes[].host_port. 0.0.0.0 = reachable from other machines; 127.0.0.1 = host only.
+  forward_host_ip: 0.0.0.0
+  nat_gateway: 10.0.2.2          # source IP of forwarded traffic inside the guest (VirtualBox NAT)
 
 postgres:
   version: 17
@@ -33,10 +37,12 @@ nodes:
   - name: pg-primary
     role: primary
     ip: 192.168.56.21
+    host_port: 5432              # host:5432 -> pg-primary:5432
     cpus: 2
     memory: 2048
   - name: pg-standby
     role: standby
     ip: 192.168.56.22
+    host_port: 5433              # host:5433 -> pg-standby:5432
     cpus: 2
     memory: 2048

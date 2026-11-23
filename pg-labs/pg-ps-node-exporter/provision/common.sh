@@ -37,3 +37,7 @@ dnf install -y firewalld
 systemctl enable --now firewalld
 firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=${SUBNET} port port=${PG_PORT} protocol=tcp accept"
 firewall-cmd --reload
+
+# Firewall: PostgreSQL port also for host port-forwarding (arrives from the VirtualBox NAT gateway)
+firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=${NAT_GATEWAY} port port=${PG_PORT} protocol=tcp accept"
+firewall-cmd --reload

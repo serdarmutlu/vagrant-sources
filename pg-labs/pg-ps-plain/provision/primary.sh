@@ -42,6 +42,15 @@ host    all             all             ${SUBNET}    scram-sha-256
 EOF
 fi
 
+# pg_hba.conf: host port-forwarding clients appear as the VirtualBox NAT gateway
+if ! grep -q "# lab host port-forward" "${PGDATA}/pg_hba.conf"; then
+  cat >> "${PGDATA}/pg_hba.conf" <<EOF
+
+# lab host port-forward
+host    all             all             ${NAT_GATEWAY}/32    scram-sha-256
+EOF
+fi
+
 systemctl enable "${SERVICE}"
 systemctl restart "${SERVICE}"
 for i in $(seq 1 30); do "${PGBIN}/pg_isready" -q -p "${PG_PORT}" && break; sleep 1; done
