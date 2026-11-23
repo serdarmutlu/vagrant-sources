@@ -17,6 +17,9 @@ sed -i 's/^SELINUX=.*/SELINUX=permissive/' /etc/selinux/config
 if ! rpm -q pgdg-redhat-repo >/dev/null 2>&1; then
   dnf install -y "https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-$(uname -m)/pgdg-redhat-repo-latest.noarch.rpm"
 fi
+# The PGDG repo file uses rhel-<major>.<minor> paths, and PGDG only keeps folders for recent
+# minors (an older box such as Rocky 9.6 gets 404). The rhel-<major> folder always exists.
+sed -i 's/\$releasever_major\.\$releasever_minor/$releasever_major/g' /etc/yum.repos.d/pgdg-redhat-all.repo
 dnf -qy module disable postgresql || true
 dnf install -y "postgresql${PG_VERSION}-server" "postgresql${PG_VERSION}" "postgresql${PG_VERSION}-contrib"
 
