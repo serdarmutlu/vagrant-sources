@@ -1,0 +1,60 @@
+# MySQL 8.4 LTS InnoDB Cluster lab - tek ayar noktasi
+# 3 x MySQL (Group Replication, single-primary) + 1 x MySQL Router
+#
+# Sifrelerde $ ` " \ ' karakterlerini kullanmayin (shell ve SQL icinde tirnaklaniyor).
+
+box: bento/rockylinux-9
+box_version: ""            # bos = en guncel
+prefix: mylab              # VirtualBox VM adi oneki (mylab-mysql1 ...)
+timezone: Europe/Istanbul
+
+network:
+  subnet: 192.168.56.0/21  # MySQL portlari (3306/33060/33061) sadece bu agdan acilir
+
+mysql:
+  # MySQL resmi yum reposu (8.4 LTS varsayilan acik gelir)
+  repo_rpm: https://repo.mysql.com/mysql84-community-release-el9-2.noarch.rpm
+  root_password: RootPass123!
+  innodb_buffer_pool_size: 512M
+
+cluster:
+  name: labcluster
+  admin_user: clusteradmin
+  admin_password: ClusterAdm123!
+  # Uygulama/test icin (cluster kurulduktan sonra primary'de olusturulur, tum node'lara replike olur)
+  app_db: appdb
+  app_user: appuser
+  app_password: AppPass123!
+
+monitoring:
+  # enabled: false + `vagrant provision --provision-with monitoring` -> exporter kaldirilir
+  node_exporter:            # tum node'lar (db + router)
+    enabled: true
+    version: 1.13.1
+    port: 9100
+  mysqld_exporter:          # sadece db node'lari
+    enabled: true
+    version: 0.21.0
+    port: 9104
+    user: exporter
+    password: ExporterPass123!
+  # vagrant her calistiginda .generated/prometheus-scrape.yml uretilir
+  scrape_interval: 15s
+
+nodes:
+  db_defaults:
+    memory: 2048
+    cpus: 2
+  # Ilk node seed'dir (cluster bunun uzerinde olusturulur). server_id benzersiz olmali.
+  db:
+    - { name: mysql1, ip: 192.168.58.11, server_id: 1 }
+    - { name: mysql2, ip: 192.168.58.12, server_id: 2 }
+    - { name: mysql3, ip: 192.168.58.13, server_id: 3 }
+  router:
+    name: myrouter
+    ip: 192.168.58.10
+    memory: 1024
+    cpus: 1
+    # true: 6446/6447/6450 host'un 127.0.0.1'ine de yonlendirilir.
+    # Gerek yok: host-only agdan 192.168.58.10 dogrudan erisilebilir.
+    forward_ports: false

@@ -1,0 +1,172 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+#
+# MySQL 8.4 LTS InnoDB Cluster lab
+#   3 x MySQL (Group Replication, single-primary) + 1 x MySQL Router
+#   Rocky Linux 9 / VirtualBox. Tum ayarlar config.yaml'da.
+#
+# Siralama (vagrant up): mysql1 -> mysql2 -> mysql3 -> myrouter
+#   db node'lari: MySQL kurulur, clusteradmin olusturulur (henuz cluster yok)
+#   myrouter    : cluster olusturulur + diger node'lar clone ile eklenir, Router bootstrap edilir
+#   monitoring  : node_exporter (tum node'lar) + mysqld_exporter (db node'lari)
+
+require 'yaml'
+
+ROOT = File.expand_path(__dir__)
+CFG  = YAML.load_file(File.join(ROOT, 'config.yaml'))
+
+PREFIX = CFG.fetch('prefix', 'mylab')
+NET    = CFG.fetch('network')
+MY     = CFG.fetch('mysql')
+CL     = CFG.fetch('cluster')
+DBDEF  = CFG['nodes']['db_defaults'] || {}
+DBS    = CFG['nodes']['db']
+RT     = CFG['nodes']['router']
+
+# Windows host'ta git CRLF ile checkout etse bile guest'e LF gider.
+def lf(rel)
+  File.binread(File.join(ROOT, rel)).gsub("\r\n", "\n")
+end
+
+# Bir dosyayi guest'e quoted heredoc ile yazan inline shell parcasi uretir.
+def deploy(rel, dest, mode)
+  tag  = 'LAB_' + File.basename(rel).upcase.gsub(/[^A-Z0-9]/, '_') + '_EOF'
+  body = lf(rel)
+  body += "\n" unless body.end_with?("\n")
+  "install -d -m 0755 #{File.dirname(dest)}\n" \
+  "cat > #{dest} <<'#{tag}'\n#{body}#{tag}\n" \
+  "chmod #{mode} #{dest}\n"
+end
+
+MON  = CFG['monitoring'] || {}
+NEXP = MON['node_exporter']   || {}
+MEXP = MON['mysqld_exporter'] || {}
+NE_ON = NEXP.fetch('enabled', false) == true
+ME_ON = MEXP.fetch('enabled', false) == true
+
+def monitoring_env(is_db)
+  {
+    'IS_DB_NODE'              => is_db ? '1' : '0',
+    'NODE_EXPORTER_ENABLED'   => NE_ON.to_s,
+    'NODE_EXPORTER_VERSION'   => NEXP['version'].to_s,
+    'NODE_EXPORTER_PORT'      => NEXP.fetch('port', 9100).to_s,
+    'MYSQLD_EXPORTER_ENABLED' => ME_ON.to_s,
+    'MYSQLD_EXPORTER_VERSION' => MEXP['version'].to_s,
+    'MYSQLD_EXPORTER_PORT'    => MEXP.fetch('port', 9104).to_s,
+    'EXPORTER_USER'           => MEXP.fetch('user', 'exporter').to_s,
+    'EXPORTER_PASSWORD'       => MEXP['password'].to_s,
+  }
+end
+
+# Prometheus icin scrape config: .generated/prometheus-scrape.yml (LF, degistiyse yazilir)
+def write_scrape_config
+  jobs = []
+  if NE_ON
+    t = DBS.map { |n| [n, 'db'] } + [[RT, 'router']]
+    jobs << { 'job_name' => 'mysql-lab-node',
+              'static_configs' => t.map { |n, role|
+                { 'targets' => ["#{n['ip']}:#{NEXP.fetch('port', 9100)}"],
+                  'labels'  => { 'node' => n['name'], 'role' => role, 'cluster' => CL['name'].to_s } } } }
+  end
+  if ME_ON
+    jobs << { 'job_name' => 'mysql-lab-mysqld',
+              'static_configs' => DBS.map { |n|
+                { 'targets' => ["#{n['ip']}:#{MEXP.fetch('port', 9104)}"],
+                  'labels'  => { 'node' => n['name'], 'cluster' => CL['name'].to_s } } } }
+  end
+  jobs.each { |j| j['scrape_interval'] = MON.fetch('scrape_interval', '15s').to_s }
+  body = "# vagrant tarafindan uretildi - elle degistirmeyin (kaynak: config.yaml)\n" \
+         "# prometheus.yml icindeki scrape_configs altina ekleyin.\n" +
+         { 'scrape_configs' => jobs }.to_yaml.sub(/\A---\n/, '')
+  dir  = File.join(ROOT, '.generated')
+  path = File.join(dir, 'prometheus-scrape.yml')
+  Dir.mkdir(dir) unless Dir.exist?(dir)
+  File.write(path, body, mode: 'wb') unless File.exist?(path) && File.binread(path) == body
+end
+write_scrape_config
+
+LAB_HOSTS = (DBS + [RT]).map { |n| "#{n['ip']}=#{n['name']}" }.join(',')
+DB_NODES  = DBS.map { |n| n['name'] }.join(',')
+
+COMMON_ENV = {
+  'LAB_HOSTS'              => LAB_HOSTS,
+  'LAB_SUBNET'             => NET['subnet'],
+  'TIMEZONE'               => CFG.fetch('timezone', 'UTC'),
+  'MYSQL_REPO_RPM'         => MY['repo_rpm'],
+  'CLUSTER_NAME'           => CL['name'],
+  'CLUSTER_ADMIN_USER'     => CL['admin_user'],
+  'CLUSTER_ADMIN_PASSWORD' => CL['admin_password'],
+  'DB_NODES'               => DB_NODES,
+}.transform_values(&:to_s)
+
+Vagrant.configure('2') do |config|
+  config.vm.box = CFG['box']
+  config.vm.box_version = CFG['box_version'].to_s unless CFG['box_version'].to_s.empty?
+  config.vm.box_check_update = false
+  # Script'ler inline gidiyor; shared folder'a (ve guest additions'a) ihtiyac yok.
+  config.vm.synced_folder '.', '/vagrant', disabled: true
+
+  # ---------------------------------------------------------------- MySQL node'lari
+  DBS.each do |n|
+    config.vm.define n['name'] do |m|
+      m.vm.hostname = n['name']
+      m.vm.network 'private_network', ip: n['ip']
+
+      m.vm.provider 'virtualbox' do |vb|
+        vb.name   = "#{PREFIX}-#{n['name']}"
+        vb.memory = n.fetch('memory', DBDEF.fetch('memory', 2048))
+        vb.cpus   = n.fetch('cpus',   DBDEF.fetch('cpus', 2))
+      end
+
+      env = COMMON_ENV.merge(
+        'NODE_NAME'               => n['name'],
+        'SERVER_ID'               => n['server_id'].to_s,
+        'MYSQL_ROOT_PASSWORD'     => MY['root_password'].to_s,
+        'INNODB_BUFFER_POOL_SIZE' => MY.fetch('innodb_buffer_pool_size', '512M').to_s,
+      )
+
+      m.vm.provision 'common', type: 'shell', inline: lf('provision/common.sh'), env: env
+      m.vm.provision 'tools',  type: 'shell', inline: deploy('provision/bin/ic', '/usr/local/bin/ic', '0755')
+      m.vm.provision 'mysql',  type: 'shell', inline: lf('provision/mysql.sh'), env: env
+      m.vm.provision 'monitoring', type: 'shell', inline: lf('provision/exporters.sh'),
+                     env: env.merge(monitoring_env(true))
+    end
+  end
+
+  # ---------------------------------------------------------------- MySQL Router
+  config.vm.define RT['name'] do |m|
+    m.vm.hostname = RT['name']
+    m.vm.network 'private_network', ip: RT['ip']
+
+    if RT.fetch('forward_ports', false)
+      [6446, 6447, 6450].each do |p|
+        m.vm.network 'forwarded_port', guest: p, host: p, host_ip: '127.0.0.1'
+      end
+    end
+
+    m.vm.provider 'virtualbox' do |vb|
+      vb.name   = "#{PREFIX}-#{RT['name']}"
+      vb.memory = RT.fetch('memory', 1024)
+      vb.cpus   = RT.fetch('cpus', 1)
+    end
+
+    env = COMMON_ENV.merge(
+      'APP_DB'       => CL['app_db'].to_s,
+      'APP_USER'     => CL['app_user'].to_s,
+      'APP_PASSWORD' => CL['app_password'].to_s,
+    )
+    # cluster.py, mysqld_exporter aciksa exporter kullanicisini primary'de olusturur
+    if ME_ON
+      env = env.merge('EXPORTER_USER'     => MEXP.fetch('user', 'exporter').to_s,
+                      'EXPORTER_PASSWORD' => MEXP['password'].to_s)
+    end
+
+    m.vm.provision 'common', type: 'shell', inline: lf('provision/common.sh'), env: env
+    m.vm.provision 'tools',  type: 'shell',
+      inline: deploy('provision/bin/ic', '/usr/local/bin/ic', '0755') +
+              deploy('provision/cluster.py', '/opt/mysql-lab/cluster.py', '0644')
+    m.vm.provision 'router', type: 'shell', inline: lf('provision/router.sh'), env: env
+    m.vm.provision 'monitoring', type: 'shell', inline: lf('provision/exporters.sh'),
+                   env: env.merge(monitoring_env(false))
+  end
+end

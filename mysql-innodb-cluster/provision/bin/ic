@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# ic - InnoDB Cluster yardimci komutu (lab). Kendini sudo ile yukseltir.
+set -euo pipefail
+[ "$(id -u)" -eq 0 ] || exec sudo -- "$0" "$@"
+
+set -a; . /etc/mysql-lab/lab.env; set +a
+FIRST="${DB_NODES%%,*}"
+
+# Baglanilacak node: IC_HOST > (db node ise) kendisi > ilk db node
+if [ -n "${IC_HOST:-}" ]; then
+  HOST="$IC_HOST"
+elif systemctl is-active -q mysqld 2>/dev/null; then
+  HOST="$(hostname -s)"
+else
+  HOST="$FIRST"
+fi
+
+msh() {
+  local h="$1"; shift
+  mysqlsh --no-wizard --user="$CLUSTER_ADMIN_USER" --password="$CLUSTER_ADMIN_PASSWORD" \
+    --host="$h" --port=3306 "$@" 2> >(grep -v 'Using a password on the command line' >&2)
+}
+C="dba.get_cluster('${CLUSTER_NAME}')"
+
+usage() {
+  cat <<EOF
+Kullanim: ic <komut> [arg]          (baglanilan node: $HOST, IC_HOST=... ile degistirin)
+  shell                 mysqlsh (Python modu), clusteradmin ile
+  status                cluster.status()
+  extended              cluster.status({'extended': 1})
+  describe              cluster.describe()
+  routers               cluster.list_routers()
+  switchover <node>     primary'yi <node>'a tasi (planli)
+  rejoin <node>         kopan node'u gruba geri al
+  reboot [node]         tum node'lar kapandiktan sonra cluster'i ayaga kaldir
+  sql "<sorgu>"         SQL calistir
+EOF
+}
+
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  shell)
+    exec mysqlsh --user="$CLUSTER_ADMIN_USER" --password="$CLUSTER_ADMIN_PASSWORD" \
+      --host="$HOST" --port=3306 --py
+    ;;
+  status)     msh "$HOST" --py -e "print(${C}.status())" ;;
+  extended)   msh "$HOST" --py -e "print(${C}.status({'extended': 1}))" ;;
+  describe)   msh "$HOST" --py -e "print(${C}.describe())" ;;
+  routers)    msh "$HOST" --py -e "print(${C}.list_routers())" ;;
+  switchover)
+    [ -n "${1:-}" ] || { usage; exit 2; }
+    msh "$HOST" --py -e "${C}.set_primary_instance('$1:3306')"
+    ;;
+  rejoin)
+    [ -n "${1:-}" ] || { usage; exit 2; }
+    msh "$HOST" --py -e "${C}.rejoin_instance('$1:3306')"
+    ;;
+  reboot)
+    for h in ${1:-${DB_NODES//,/ }}; do
+      echo "[ic] reboot_cluster_from_complete_outage -> $h"
+      if msh "$h" --py -e "dba.reboot_cluster_from_complete_outage('${CLUSTER_NAME}')"; then
+        exit 0
+      fi
+    done
+    echo "[ic] reboot basarisiz. En guncel GTID'e sahip node'u verin: ic reboot <node>" >&2
+    exit 1
+    ;;
+  sql)        msh "$HOST" --sql -e "$*" ;;
+  help|-h|--help) usage ;;
+  *)          usage; exit 2 ;;
+esac
