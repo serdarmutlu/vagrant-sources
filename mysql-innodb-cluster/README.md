@@ -5,10 +5,10 @@ Tek ayar noktası `config.yaml`. Ortam değişkeni gerekmez; komutları bu klas�
 
 | Node     | Rol                                     | IP            | VM adı         |
 |----------|-----------------------------------------|---------------|----------------|
-| mysql1   | Group Replication üyesi (ilk primary)   | 192.168.56.41 | mylab-mysql1   |
-| mysql2   | Group Replication üyesi                 | 192.168.56.42 | mylab-mysql2   |
-| mysql3   | Group Replication üyesi                 | 192.168.56.43 | mylab-mysql3   |
-| myrouter | MySQL Router + MySQL Shell              | 192.168.56.40 | mylab-myrouter |
+| mysql1   | Group Replication üyesi (ilk primary)   | 192.168.58.11 | mylab-mysql1   |
+| mysql2   | Group Replication üyesi                 | 192.168.58.12 | mylab-mysql2   |
+| mysql3   | Group Replication üyesi                 | 192.168.58.13 | mylab-mysql3   |
+| myrouter | MySQL Router + MySQL Shell              | 192.168.58.10 | mylab-myrouter |
 
 Kaynak: 3 × 2 GB + 1 GB RAM. İzleme: node_exporter (hepsi, :9100), mysqld_exporter (db node'ları, :9104).
 
@@ -53,11 +53,32 @@ vagrant ssh myrouter -c "mysql -h127.0.0.1 -P6447 -uappuser -pAppPass123! -e 'SE
 Host'tan (veya DBMind'dan) bağlantı:
 
 ```
-jdbc:mysql://192.168.56.40:6446/appdb      # RW
-jdbc:mysql://192.168.56.40:6447/appdb      # RO
+jdbc:mysql://192.168.58.10:6446/appdb      # RW
+jdbc:mysql://192.168.58.10:6447/appdb      # RO
 ```
 
-`clusteradmin` (tüm yetkiler) ile doğrudan node'lara da bağlanabilirsiniz: `192.168.56.41-43:3306`.
+`clusteradmin` (tüm yetkiler) ile doğrudan node'lara da bağlanabilirsiniz: `192.168.58.11-13:3306`.
+
+### Uzaktan erişim (host port yönlendirme)
+
+Host-only ağa (`192.168.58.x`) yalnızca host makinenin kendisi erişebilir. Başka makinelerden bağlanmak için
+portlar VirtualBox NAT üzerinden host'a yönlendirilir (`config.yaml`):
+
+| Host portu | Hedef | Ayar |
+|------------|-------|------|
+| 6446 / 6447 / 6450 | `myrouter` (RW / RO / RW-split) | `nodes.router.forward_ports: true` |
+| 3311 / 3312 / 3313 | `mysql1` / `mysql2` / `mysql3` : 3306 | `nodes.db[].host_port` |
+
+```
+mysql -h <host-ip> -P6446 -uappuser -pAppPass123! appdb        # primary (Router üzerinden)
+mysql -h <host-ip> -P3312 -uclusteradmin -pClusterAdm123!      # doğrudan mysql2
+```
+
+- `network.forward_host_ip: 0.0.0.0` diğer makinelerden erişime açar; `127.0.0.1` yalnızca host'a.
+- Yönlendirilen trafik guest içinde `network.nat_gateway` (`10.0.2.2`) adresinden gelir. `mysql.sh` bu adrese
+  3306 için firewall kuralı ekler.
+- Çalışan VM'lere uygulamak için: `vagrant reload --provision`.
+- Host'ta aynı portları kullanan başka bir servis varsa `vagrant up` hata verir (`auto_correct: false`).
 
 ## `ic` yardımcı komutu
 
@@ -119,7 +140,7 @@ vagrant ssh myrouter -c "ic reboot"
 | mysqld_exporter 0.21.0 | mysql1-3 | 9104 | Group Replication + InnoDB collector'ları açık |
 
 - Binary'ler GitHub release'inden indirilir ve `sha256sums.txt` ile doğrulanır. Servisler ayrı sistem kullanıcısıyla,
-  systemd hardening ile çalışır. Portlar sadece `192.168.56.0/24`'ten açıktır; host (192.168.56.1) doğrudan scrape edebilir.
+  systemd hardening ile çalışır. Portlar sadece `192.168.56.0/21`'den açıktır; host (192.168.58.1) doğrudan scrape edebilir.
 - mysqld_exporter, her node'da `127.0.0.1:3306`'ya `exporter` kullanıcısıyla bağlanır
   (`PROCESS, REPLICATION CLIENT, SELECT`, en fazla 3 bağlantı). Kullanıcı `cluster.py` tarafından primary'de
   oluşturulur ve tüm node'lara replike olur. İlk kurulumda db node'ları router'dan önce ayağa kalktığı için
@@ -162,7 +183,7 @@ vagrant provision myrouter --provision-with router     # exporter MySQL kullanı
 - **Primary key zorunlu:** Group Replication, primary key'i olmayan tablolarda DML'i reddeder.
   Test şemalarında her tabloya PK ekleyin.
 - Sadece InnoDB kullanılabilir. MyISAM, MEMORY vb. `disabled_storage_engines` ile kapatıldı.
-- SELinux permissive (lab). MySQL portları firewalld ile sadece `192.168.56.0/24`'ten açık, Router portları herkese açık.
+- SELinux permissive (lab). MySQL portları firewalld ile sadece `192.168.56.0/21`'den (ve host port yönlendirme için `10.0.2.2`'den) açık, Router portları herkese açık.
 - Şifreler `config.yaml`'da düz metin durur (lab). Şifrelerde `$ \` " \ '` kullanmayın.
 - Script'ler Vagrantfile tarafından CRLF temizlenerek inline gönderilir; Windows host'ta git CRLF ile checkout etse
   bile sorun çıkmaz. `.gitattributes` de LF'yi zorlar.

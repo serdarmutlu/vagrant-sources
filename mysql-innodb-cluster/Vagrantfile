@@ -22,6 +22,7 @@ CL     = CFG.fetch('cluster')
 DBDEF  = CFG['nodes']['db_defaults'] || {}
 DBS    = CFG['nodes']['db']
 RT     = CFG['nodes']['router']
+FWD_IP = NET.fetch('forward_host_ip', '127.0.0.1').to_s
 
 # Windows host'ta git CRLF ile checkout etse bile guest'e LF gider.
 def lf(rel)
@@ -91,6 +92,7 @@ DB_NODES  = DBS.map { |n| n['name'] }.join(',')
 COMMON_ENV = {
   'LAB_HOSTS'              => LAB_HOSTS,
   'LAB_SUBNET'             => NET['subnet'],
+  'NAT_GATEWAY'            => NET.fetch('nat_gateway', '10.0.2.2'),
   'TIMEZONE'               => CFG.fetch('timezone', 'UTC'),
   'MYSQL_REPO_RPM'         => MY['repo_rpm'],
   'CLUSTER_NAME'           => CL['name'],
@@ -111,6 +113,10 @@ Vagrant.configure('2') do |config|
     config.vm.define n['name'] do |m|
       m.vm.hostname = n['name']
       m.vm.network 'private_network', ip: n['ip']
+      if n['host_port']
+        m.vm.network 'forwarded_port', id: 'mysql', guest: 3306, host: n['host_port'],
+                     host_ip: FWD_IP, auto_correct: false
+      end
 
       m.vm.provider 'virtualbox' do |vb|
         vb.name   = "#{PREFIX}-#{n['name']}"
@@ -140,7 +146,8 @@ Vagrant.configure('2') do |config|
 
     if RT.fetch('forward_ports', false)
       [6446, 6447, 6450].each do |p|
-        m.vm.network 'forwarded_port', guest: p, host: p, host_ip: '127.0.0.1'
+        m.vm.network 'forwarded_port', id: "router-#{p}", guest: p, host: p,
+                     host_ip: FWD_IP, auto_correct: false
       end
     end
 

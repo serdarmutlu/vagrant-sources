@@ -21,6 +21,12 @@ for p in 3306 33060 33061; do
   firewall-cmd --permanent --query-rich-rule="$rule" >/dev/null 2>&1 \
     || firewall-cmd --permanent --add-rich-rule="$rule" >/dev/null
 done
+# Host port yonlendirme: VirtualBox NAT uzerinden gelen trafik (kaynak: NAT gateway)
+if [ -n "${NAT_GATEWAY:-}" ]; then
+  rule="rule family=ipv4 source address=${NAT_GATEWAY} port port=3306 protocol=tcp accept"
+  firewall-cmd --permanent --query-rich-rule="$rule" >/dev/null 2>&1 \
+    || firewall-cmd --permanent --add-rich-rule="$rule" >/dev/null
+fi
 firewall-cmd --reload >/dev/null
 
 # --- my.cnf -------------------------------------------------------------------

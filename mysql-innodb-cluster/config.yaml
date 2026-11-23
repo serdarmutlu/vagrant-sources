@@ -10,6 +10,10 @@ timezone: Europe/Istanbul
 
 network:
   subnet: 192.168.56.0/21  # MySQL portlari (3306/33060/33061) sadece bu agdan acilir
+  # Host port yonlendirme (VirtualBox NAT): db node'lari nodes.db[].host_port'tan,
+  # router 6446/6447/6450'den erisilir. 0.0.0.0 = diger makinelerden de; 127.0.0.1 = sadece host.
+  forward_host_ip: 0.0.0.0
+  nat_gateway: 10.0.2.2    # yonlendirilen trafik guest icinde bu IP'den gelir (firewall kurali)
 
 mysql:
   # MySQL resmi yum reposu (8.4 LTS varsayilan acik gelir)
@@ -46,15 +50,16 @@ nodes:
     memory: 2048
     cpus: 2
   # Ilk node seed'dir (cluster bunun uzerinde olusturulur). server_id benzersiz olmali.
+  # host_port: host:<host_port> -> node:3306 (silinirse yonlendirme yapilmaz)
   db:
-    - { name: mysql1, ip: 192.168.58.11, server_id: 1 }
-    - { name: mysql2, ip: 192.168.58.12, server_id: 2 }
-    - { name: mysql3, ip: 192.168.58.13, server_id: 3 }
+    - { name: mysql1, ip: 192.168.58.11, server_id: 1, host_port: 3311 }
+    - { name: mysql2, ip: 192.168.58.12, server_id: 2, host_port: 3312 }
+    - { name: mysql3, ip: 192.168.58.13, server_id: 3, host_port: 3313 }
   router:
     name: myrouter
     ip: 192.168.58.10
     memory: 1024
     cpus: 1
-    # true: 6446/6447/6450 host'un 127.0.0.1'ine de yonlendirilir.
-    # Gerek yok: host-only agdan 192.168.58.10 dogrudan erisilebilir.
-    forward_ports: false
+    # true: 6446 (RW) / 6447 (RO) / 6450 (RW-split) host'ta ayni portlardan
+    # network.forward_host_ip uzerinden yayinlanir (uzaktan erisim icin).
+    forward_ports: true
