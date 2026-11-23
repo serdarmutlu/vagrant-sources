@@ -42,12 +42,12 @@ host    all             all             ${SUBNET}    scram-sha-256
 EOF
 fi
 
-# pg_hba.conf: host port-forwarding clients appear as the VirtualBox NAT gateway
+# pg_hba.conf: host port-forwarding clients keep their real IP (firewalld limits who gets through)
 if ! grep -q "# lab host port-forward" "${PGDATA}/pg_hba.conf"; then
   cat >> "${PGDATA}/pg_hba.conf" <<EOF
 
 # lab host port-forward
-host    all             all             ${NAT_GATEWAY}/32    scram-sha-256
+host    all             all             0.0.0.0/0    scram-sha-256
 EOF
 fi
 

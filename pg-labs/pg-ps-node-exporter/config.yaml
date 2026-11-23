@@ -9,7 +9,6 @@ network:
   # Host port forwarding (VirtualBox NAT). Each node's PostgreSQL port is published on the
   # host at nodes[].host_port. 0.0.0.0 = reachable from other machines; 127.0.0.1 = host only.
   forward_host_ip: 0.0.0.0
-  nat_gateway: 10.0.2.2          # source IP of forwarded traffic inside the guest (VirtualBox NAT)
 
 postgres:
   version: 17

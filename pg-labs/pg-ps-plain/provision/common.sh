@@ -38,6 +38,10 @@ systemctl enable --now firewalld
 firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=${SUBNET} port port=${PG_PORT} protocol=tcp accept"
 firewall-cmd --reload
 
-# Firewall: PostgreSQL port also for host port-forwarding (arrives from the VirtualBox NAT gateway)
-firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=${NAT_GATEWAY} port port=${PG_PORT} protocol=tcp accept"
-firewall-cmd --reload
+# Firewall: PostgreSQL port also for host port-forwarding. VirtualBox NAT keeps the real client IP,
+# so match on the destination instead: only forwarded traffic reaches the NAT interface address.
+NAT_IP="$(ip -4 -o addr show dev "$(ip -4 route show default | awk '{print $5; exit}')" | awk '{print $4; exit}' | cut -d/ -f1)"
+if [ -n "${NAT_IP}" ]; then
+  firewall-cmd --permanent --add-rich-rule="rule family=ipv4 destination address=${NAT_IP} port port=${PG_PORT} protocol=tcp accept"
+  firewall-cmd --reload
+fi

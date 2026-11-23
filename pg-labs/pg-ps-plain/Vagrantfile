@@ -44,7 +44,6 @@ Vagrant.configure('2') do |config|
       env = {
         'HOSTS'            => hosts,
         'SUBNET'           => CFG['network']['subnet'],
-        'NAT_GATEWAY'      => CFG['network'].fetch('nat_gateway', '10.0.2.2').to_s,
         'PRIMARY_IP'       => PRIMARY['ip'],
         'PG_VERSION'       => PG['version'].to_s,
         'PG_PORT'          => PG['port'].to_s,

@@ -75,8 +75,9 @@ mysql -h <host-ip> -P3312 -uclusteradmin -pClusterAdm123!      # doğrudan mysql
 ```
 
 - `network.forward_host_ip: 0.0.0.0` diğer makinelerden erişime açar; `127.0.0.1` yalnızca host'a.
-- Yönlendirilen trafik guest içinde `network.nat_gateway` (`10.0.2.2`) adresinden gelir. `mysql.sh` bu adrese
-  3306 için firewall kuralı ekler.
+- VirtualBox NAT istemcinin gerçek IP'sini korur. Bu yüzden `mysql.sh`, 3306'yı kaynağa göre değil, VM'in NAT
+  adresine (`10.0.2.15`) gelen trafik için açar; bu adrese yalnızca host'tan yönlendirilen bağlantılar ulaşır.
+- `my.cnf`'te `skip_name_resolve=ON`: uzak istemci IP'leri için reverse DNS yapılmaz (bağlantı ~10 sn beklemesin).
 - Çalışan VM'lere uygulamak için: `vagrant reload --provision`.
 - Host'ta aynı portları kullanan başka bir servis varsa `vagrant up` hata verir (`auto_correct: false`).
 
@@ -183,7 +184,7 @@ vagrant provision myrouter --provision-with router     # exporter MySQL kullanı
 - **Primary key zorunlu:** Group Replication, primary key'i olmayan tablolarda DML'i reddeder.
   Test şemalarında her tabloya PK ekleyin.
 - Sadece InnoDB kullanılabilir. MyISAM, MEMORY vb. `disabled_storage_engines` ile kapatıldı.
-- SELinux permissive (lab). MySQL portları firewalld ile sadece `192.168.56.0/21`'den (ve host port yönlendirme için `10.0.2.2`'den) açık, Router portları herkese açık.
+- SELinux permissive (lab). MySQL portları firewalld ile sadece `192.168.56.0/21`'den (ve host port yönlendirme için NAT adresine `10.0.2.15`) açık, Router portları herkese açık.
 - Şifreler `config.yaml`'da düz metin durur (lab). Şifrelerde `$ \` " \ '` kullanmayın.
 - Script'ler Vagrantfile tarafından CRLF temizlenerek inline gönderilir; Windows host'ta git CRLF ile checkout etse
   bile sorun çıkmaz. `.gitattributes` de LF'yi zorlar.

@@ -92,7 +92,6 @@ DB_NODES  = DBS.map { |n| n['name'] }.join(',')
 COMMON_ENV = {
   'LAB_HOSTS'              => LAB_HOSTS,
   'LAB_SUBNET'             => NET['subnet'],
-  'NAT_GATEWAY'            => NET.fetch('nat_gateway', '10.0.2.2'),
   'TIMEZONE'               => CFG.fetch('timezone', 'UTC'),
   'MYSQL_REPO_RPM'         => MY['repo_rpm'],
   'CLUSTER_NAME'           => CL['name'],

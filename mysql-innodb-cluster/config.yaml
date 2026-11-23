@@ -13,7 +13,6 @@ network:
   # Host port yonlendirme (VirtualBox NAT): db node'lari nodes.db[].host_port'tan,
   # router 6446/6447/6450'den erisilir. 0.0.0.0 = diger makinelerden de; 127.0.0.1 = sadece host.
   forward_host_ip: 0.0.0.0
-  nat_gateway: 10.0.2.2    # yonlendirilen trafik guest icinde bu IP'den gelir (firewall kurali)
 
 mysql:
   # MySQL resmi yum reposu (8.4 LTS varsayilan acik gelir)

@@ -21,9 +21,13 @@ for p in 3306 33060 33061; do
   firewall-cmd --permanent --query-rich-rule="$rule" >/dev/null 2>&1 \
     || firewall-cmd --permanent --add-rich-rule="$rule" >/dev/null
 done
-# Host port yonlendirme: VirtualBox NAT uzerinden gelen trafik (kaynak: NAT gateway)
-if [ -n "${NAT_GATEWAY:-}" ]; then
-  rule="rule family=ipv4 source address=${NAT_GATEWAY} port port=3306 protocol=tcp accept"
+# Host port yonlendirme: VirtualBox NAT, istemcinin gercek IP'sini korur (10.0.2.2 degil).
+# Bu yuzden kaynak yerine hedefe gore acilir: NAT arayuzunun IP'sine (10.0.2.15) gelen 3306
+# yalnizca host'tan yonlendirilmis trafik olabilir.
+firewall-cmd --permanent --remove-rich-rule="rule family=ipv4 source address=10.0.2.2 port port=3306 protocol=tcp accept" >/dev/null 2>&1 || true
+NAT_IP="$(ip -4 -o addr show dev "$(ip -4 route show default | awk '{print $5; exit}')" | awk '{print $4; exit}' | cut -d/ -f1)"
+if [ -n "$NAT_IP" ]; then
+  rule="rule family=ipv4 destination address=${NAT_IP} port port=3306 protocol=tcp accept"
   firewall-cmd --permanent --query-rich-rule="$rule" >/dev/null 2>&1 \
     || firewall-cmd --permanent --add-rich-rule="$rule" >/dev/null
 fi
@@ -44,6 +48,9 @@ server_id=${SERVER_ID}
 report_host=${NODE_NAME}
 bind_address=0.0.0.0
 mysqlx_bind_address=0.0.0.0
+# Istemci IP'si icin reverse DNS yapma: cozumlenemeyen IP'lerde (or. host port yonlendirme
+# ile gelen uzak istemciler) baglanti ~10 sn bekliyordu. Hesaplar '%' / localhost / 127.0.0.1.
+skip_name_resolve=ON
 
 gtid_mode=ON
 enforce_gtid_consistency=ON
