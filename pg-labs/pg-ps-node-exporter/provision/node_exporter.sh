@@ -32,8 +32,9 @@ if ! /usr/local/bin/node_exporter --version 2>&1 | grep "version ${VER} " >/dev/
   TARBALL="node_exporter-${VER}.linux-${ARCH}.tar.gz"
   BASE="https://github.com/prometheus/node_exporter/releases/download/v${VER}"
   TMP="$(mktemp -d)"
-  curl -fsSL -o "${TMP}/${TARBALL}" "${BASE}/${TARBALL}"
-  curl -fsSL -o "${TMP}/sha256sums.txt" "${BASE}/sha256sums.txt"
+  # Retry on any error (incl. DNS "could not resolve host"), which is flaky behind VirtualBox NAT.
+  curl -fsSL --retry 5 --retry-all-errors -o "${TMP}/${TARBALL}" "${BASE}/${TARBALL}"
+  curl -fsSL --retry 5 --retry-all-errors -o "${TMP}/sha256sums.txt" "${BASE}/sha256sums.txt"
   (cd "${TMP}" && grep " ${TARBALL}\$" sha256sums.txt | sha256sum -c -)
   tar -xzf "${TMP}/${TARBALL}" -C "${TMP}"
   install -m 0755 "${TMP}/node_exporter-${VER}.linux-${ARCH}/node_exporter" /usr/local/bin/node_exporter
