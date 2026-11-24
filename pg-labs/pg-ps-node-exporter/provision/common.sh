@@ -26,7 +26,8 @@ dnf install -y "postgresql${PG_VERSION}-server" "postgresql${PG_VERSION}" "postg
 # system_stats extension (files only; CREATE EXTENSION is done manually per database)
 if [ "${SYSTEM_STATS:-false}" = "true" ]; then
   dnf install -y "system_stats_${PG_VERSION}"
-  rpm -ql "system_stats_${PG_VERSION}" | grep -q 'system_stats\.control' \
+  # No 'grep -q': it exits on first match, rpm gets SIGPIPE (141) and pipefail fails the pipeline.
+  rpm -ql "system_stats_${PG_VERSION}" | grep 'system_stats\.control' >/dev/null \
     || { echo "system_stats_${PG_VERSION}: control file not found in package" >&2; exit 1; }
 fi
 
@@ -43,7 +44,8 @@ firewall-cmd --reload
 
 # Firewall: PostgreSQL port also for host port-forwarding. VirtualBox NAT keeps the real client IP,
 # so match on the destination instead: only forwarded traffic reaches the NAT interface address.
-NAT_IP="$(ip -4 -o addr show dev "$(ip -4 route show default | awk '{print $5; exit}')" | awk '{print $4; exit}' | cut -d/ -f1)"
+# awk NR==1 instead of 'exit': keep reading so the writer never gets SIGPIPE under pipefail.
+NAT_IP="$(ip -4 -o addr show dev "$(ip -4 route show default | awk 'NR==1{print $5}')" | awk 'NR==1{print $4}' | cut -d/ -f1)"
 if [ -n "${NAT_IP}" ]; then
   firewall-cmd --permanent --add-rich-rule="rule family=ipv4 destination address=${NAT_IP} port port=${PG_PORT} protocol=tcp accept"
   firewall-cmd --reload

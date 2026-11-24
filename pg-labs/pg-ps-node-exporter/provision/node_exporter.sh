@@ -27,7 +27,8 @@ case "$(uname -m)" in
 esac
 
 # Install / upgrade the binary only when the version differs
-if ! /usr/local/bin/node_exporter --version 2>&1 | head -1 | grep -q "version ${VER} "; then
+# No head/grep -q: early exit SIGPIPEs the writer and pipefail turns that into a false mismatch.
+if ! /usr/local/bin/node_exporter --version 2>&1 | grep "version ${VER} " >/dev/null; then
   TARBALL="node_exporter-${VER}.linux-${ARCH}.tar.gz"
   BASE="https://github.com/prometheus/node_exporter/releases/download/v${VER}"
   TMP="$(mktemp -d)"
